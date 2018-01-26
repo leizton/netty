@@ -158,7 +158,7 @@ public class HashedWheelTimer implements Timer {
      * @throws NullPointerException if {@code threadFactory} is {@code null}
      */
     public HashedWheelTimer(ThreadFactory threadFactory) {
-        this(threadFactory, 100, TimeUnit.MILLISECONDS);
+        this(threadFactory, 100, TimeUnit.MILLISECONDS);  //= tickDuration=100毫秒
     }
 
     /**
@@ -174,7 +174,7 @@ public class HashedWheelTimer implements Timer {
      */
     public HashedWheelTimer(
             ThreadFactory threadFactory, long tickDuration, TimeUnit unit) {
-        this(threadFactory, tickDuration, unit, 512);
+        this(threadFactory, tickDuration, unit, 512);  //= ticksPerWheel=512
     }
 
     /**
@@ -420,7 +420,7 @@ public class HashedWheelTimer implements Timer {
         // During processing all the queued HashedWheelTimeouts will be added to the correct HashedWheelBucket.
         long deadline = System.nanoTime() + unit.toNanos(delay) - startTime;
         HashedWheelTimeout timeout = new HashedWheelTimeout(this, task, deadline);
-        timeouts.add(timeout);
+        timeouts.add(timeout);  //= 放到timeouts队列中等待Worker.run()里transferTimeoutsToBuckets()把timeout放到某个bucket中
         return timeout;
     }
 
@@ -438,6 +438,7 @@ public class HashedWheelTimer implements Timer {
                 "so that only a few instances are created.");
     }
 
+    //= 在HashedWheelTimer.start()里启动, workerThread.start()
     private final class Worker implements Runnable {
         private final Set<Timeout> unprocessedTimeouts = new HashSet<Timeout>();
 
@@ -447,23 +448,27 @@ public class HashedWheelTimer implements Timer {
         public void run() {
             // Initialize the startTime.
             startTime = System.nanoTime();
-            if (startTime == 0) {
+            if (startTime == 0) {  //= 0表示还未开始, 见start()的while
                 // We use 0 as an indicator for the uninitialized value here, so make sure it's not 0 when initialized.
                 startTime = 1;
             }
 
             // Notify the other threads waiting for the initialization at start().
-            startTimeInitialized.countDown();
+            startTimeInitialized.countDown();  //= 通知newTimeout()里的start()
 
             do {
-                final long deadline = waitForNextTick();
+                final long deadline = waitForNextTick();  //= 通过Thread.sleep()实现
                 if (deadline > 0) {
                     int idx = (int) (tick & mask);
                     processCancelledTasks();
                     HashedWheelBucket bucket = wheel[idx];
                     transferTimeoutsToBuckets();
+
+                    //= 到期的timeout移出bucket, 并调用timeout.expire()=>task.run()
+                    //= cancelled的timeout移出bucket
+                    //= 未到期的remainingRounds--
                     bucket.expireTimeouts(deadline);
-                    tick++;
+                    tick++;  //= 类似时钟上秒针走一下
                 }
             } while (WORKER_STATE_UPDATER.get(HashedWheelTimer.this) == WORKER_STATE_STARTED);
 
@@ -483,7 +488,7 @@ public class HashedWheelTimer implements Timer {
             processCancelledTasks();
         }
 
-        private void transferTimeoutsToBuckets() {
+        private void transferTimeoutsToBuckets() {  //= 把timeout转移到某个bucket
             // transfer only max. 100000 timeouts per tick to prevent a thread to stale the workerThread when it just
             // adds new timeouts in a loop.
             for (int i = 0; i < 100000; i++) {
@@ -497,7 +502,7 @@ public class HashedWheelTimer implements Timer {
                     continue;
                 }
 
-                long calculated = timeout.deadline / tickDuration;
+                long calculated = timeout.deadline / tickDuration;  //= 算出deadline对应从start开始的第几个tick, tickDuration是final字段
                 timeout.remainingRounds = (calculated - tick) / wheel.length;
 
                 final long ticks = Math.max(calculated, tick); // Ensure we don't schedule for past.
@@ -510,13 +515,13 @@ public class HashedWheelTimer implements Timer {
 
         private void processCancelledTasks() {
             for (;;) {
-                HashedWheelTimeout timeout = cancelledTimeouts.poll();
+                HashedWheelTimeout timeout = cancelledTimeouts.poll();  //= has called timeout.cancel()
                 if (timeout == null) {
                     // all processed
                     break;
                 }
                 try {
-                    timeout.remove();
+                    timeout.remove();  //= 将timeout从所在的bucket中移出
                 } catch (Throwable t) {
                     if (logger.isWarnEnabled()) {
                         logger.warn("An exception was thrown while process a cancellation task", t);
